@@ -482,7 +482,23 @@ $("btn-drive").addEventListener("click",()=>{if(localStorage.getItem(CONKEY)){di
 function disconnectDrive(){accessToken=null;driveFileId=null;localStorage.removeItem(CONKEY);refreshDriveBtn();syncState(null);driveStatus("Deconectat.","");}
 function refreshDriveBtn(){const con=!!localStorage.getItem(CONKEY);const b=$("btn-drive");b.classList.toggle("connected",con);$("drive-label").textContent=con?"Conectat — apasă pentru deconectare":"Conectează Google Drive";}
 async function driveFetch(url,opts){opts=opts||{};opts.headers=Object.assign({Authorization:"Bearer "+accessToken},opts.headers||{});let r=await fetch(url,opts);if(r.status===401){const t=await reAuth();if(!t)throw new Error("auth");opts.headers.Authorization="Bearer "+accessToken;r=await fetch(url,opts);}return r;}
-function reAuth(){return new Promise(res=>{if(!tokenClient){res(null);return;}const orig=tokenClient.callback;tokenClient.callback=resp=>{tokenClient.callback=orig;if(resp.error){res(null);}else{accessToken=resp.access_token;res(accessToken);}};tokenClient.requestAccessToken({prompt:""});});}
+function reAuth(){
+  return new Promise(res=>{
+    if(!tokenClient){res(null);return;}
+    const orig=tokenClient.callback;
+    tokenClient.callback=resp=>{
+      tokenClient.callback=orig;
+      if(resp.error){res(null);}
+      else{
+        accessToken=resp.access_token;
+        res(accessToken);
+      }
+    };
+    // Pentru Desktop App rulat in browser, prompt gol se inlocuieste cu select_account
+    // pentru a reimprospata token-ul fara a cere consimtamantul complet din nou
+    tokenClient.requestAccessToken({prompt:"select_account"});
+  });
+}
 async function findFile(){const q=encodeURIComponent("name='"+FILE_NAME+"'");const r=await driveFetch("https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q="+q);const d=await r.json();return d.files&&d.files[0]?d.files[0].id:null;}
 async function readFile(id){const r=await driveFetch("https://www.googleapis.com/drive/v3/files/"+id+"?alt=media");try{return await r.json();}catch(e){return{entries:[],deleted:[]};}}
 async function createFile(data){const meta={name:FILE_NAME,parents:["appDataFolder"]};const body=new FormData();body.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));body.append("file",new Blob([JSON.stringify(data)],{type:"application/json"}));const r=await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{method:"POST",body});const d=await r.json();return d.id;}
