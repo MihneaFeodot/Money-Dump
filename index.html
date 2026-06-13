@@ -476,10 +476,39 @@ function syncState(s){const el=$("btn-settings");el.classList.remove("ok","synci
 function driveStatus(msg,cls){const el=$("drive-status");el.className="set-status"+(cls?" "+cls:"");el.textContent=msg||"";}
 function waitGis(cb,tries){tries=tries||0;if(window.google&&google.accounts&&google.accounts.oauth2){gisReady=true;cb();}else if(tries<40){setTimeout(()=>waitGis(cb,tries+1),150);}}
 function initTokenClient(){const cid=localStorage.getItem(CIDKEY);if(!cid||!gisReady)return false;tokenClient=google.accounts.oauth2.initTokenClient({client_id:cid,scope:"https://www.googleapis.com/auth/drive.appdata",callback:tokenCb});return true;}
-async function tokenCb(resp){if(resp.error){syncState("error");driveStatus("Conectare eșuată: "+resp.error,"bad");return;}accessToken=resp.access_token;localStorage.setItem(CONKEY,"1");refreshDriveBtn();await fullSync(true);}
+async function tokenCb(resp){
+  if(resp.error){
+    syncState("error");
+    // Daca rulam pe fundal si e nevoie de interactiune, nu alarmam utilizatorul cu erori ciudate
+    if(resp.error === "interaction_required" || resp.error === "immediate_failed") {
+      driveStatus("Sesiune expirata. Apasa Conecteaza.","bad");
+    } else {
+      driveStatus("Conectare esuata: " + resp.error, "bad");
+    }
+    return;
+  }
+  accessToken = resp.access_token;
+  
+  // Salveaza token-ul si timpul de expirare (Google ofera de obicei 3600 secunde = 1 ora)
+  localStorage.setItem("moneydump_token", accessToken);
+  localStorage.setItem("moneydump_token_expiry", Date.now() + (resp.expires_in * 1000));
+  
+  localStorage.setItem(CONKEY,"1");
+  refreshDriveBtn();
+  await fullSync(true);
+}
 function connectDrive(){const cid=$("client-id").value.trim();if(!cid){driveStatus("Lipsește Client ID-ul.","bad");return;}localStorage.setItem(CIDKEY,cid);if(!gisReady){driveStatus("Google încă se încarcă, mai încearcă.","bad");return;}if(!initTokenClient()){driveStatus("Nu pot porni Google.","bad");return;}driveStatus("Se deschide fereastra Google…");tokenClient.requestAccessToken({prompt:"consent"});}
 $("btn-drive").addEventListener("click",()=>{if(localStorage.getItem(CONKEY)){disconnectDrive();}else{connectDrive();}});
-function disconnectDrive(){accessToken=null;driveFileId=null;localStorage.removeItem(CONKEY);refreshDriveBtn();syncState(null);driveStatus("Deconectat.","");}
+function disconnectDrive(){
+  accessToken = null;
+  driveFileId = null;
+  localStorage.removeItem(CONKEY);
+  localStorage.removeItem("moneydump_token");
+  localStorage.removeItem("moneydump_token_expiry");
+  refreshDriveBtn();
+  syncState(null);
+  driveStatus("Deconectat.","");
+}
 function refreshDriveBtn(){const con=!!localStorage.getItem(CONKEY);const b=$("btn-drive");b.classList.toggle("connected",con);$("drive-label").textContent=con?"Conectat — apasă pentru deconectare":"Conectează Google Drive";}
 async function driveFetch(url,opts){opts=opts||{};opts.headers=Object.assign({Authorization:"Bearer "+accessToken},opts.headers||{});let r=await fetch(url,opts);if(r.status===401){const t=await reAuth();if(!t)throw new Error("auth");opts.headers.Authorization="Bearer "+accessToken;r=await fetch(url,opts);}return r;}
 function reAuth(){
@@ -511,7 +540,27 @@ function renderAll(){updateToday();if(app.dataset.view==="history")renderHistory
 
 /* ---------- init ---------- */
 setGreeting();updateToday();autosize();refreshDriveBtn();
-waitGis(()=>{if(localStorage.getItem(CIDKEY)){initTokenClient();if(localStorage.getItem(CONKEY)&&tokenClient){tokenClient.requestAccessToken({prompt:""});}}});
+waitGis(()=>{
+  if(localStorage.getItem(CIDKEY)){
+    initTokenClient();
+    
+    const savedToken = localStorage.getItem("moneydump_token");
+    const expiry = localStorage.getItem("moneydump_token_expiry");
+    
+    // PASUL A: Daca avem un token salvat si inca este valabil (sub o ora), il folosim instant, fara popup!
+    if(savedToken && expiry && Date.now() < parseInt(expiry)){
+      accessToken = savedToken;
+      syncState("ok");
+      refreshDriveBtn();
+      fullSync(true);
+    } 
+    // PASUL B: Daca a expirat ora, dar utilizatorul era conectat, cerem un token nou in fundal (prompt: "none")
+    // Acest mod foloseste cookie-urile Google din browser, nu deschide popup si nu este blocat de telefon!
+    else if(localStorage.getItem(CONKEY) && tokenClient){
+      tokenClient.requestAccessToken({prompt:"none"});
+    }
+  }
+});
 if(isDesktop)setTimeout(()=>nameInput.focus(),500);
 
 })();
