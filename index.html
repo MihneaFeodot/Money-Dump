@@ -476,70 +476,40 @@ function syncState(s){const el=$("btn-settings");el.classList.remove("ok","synci
 function driveStatus(msg,cls){const el=$("drive-status");el.className="set-status"+(cls?" "+cls:"");el.textContent=msg||"";}
 function waitGis(cb,tries){tries=tries||0;if(window.google&&google.accounts&&google.accounts.oauth2){gisReady=true;cb();}else if(tries<40){setTimeout(()=>waitGis(cb,tries+1),150);}}
 function initTokenClient(){const cid=localStorage.getItem(CIDKEY);if(!cid||!gisReady)return false;tokenClient=google.accounts.oauth2.initTokenClient({client_id:cid,scope:"https://www.googleapis.com/auth/drive.appdata",callback:tokenCb});return true;}
+
 async function tokenCb(resp){
   if(resp.error){
     syncState("error");
-    // Daca rulam pe fundal si e nevoie de interactiune, nu alarmam utilizatorul cu erori ciudate
-    if(resp.error === "interaction_required" || resp.error === "immediate_failed") {
-      driveStatus("Sesiune expirata. Apasa Conecteaza.","bad");
-    } else {
-      driveStatus("Conectare esuata: " + resp.error, "bad");
-    }
+    driveStatus("Conectare esuata: "+resp.error,"bad");
     return;
   }
-  accessToken = resp.access_token;
-  
-  // Salveaza token-ul si timpul de expirare (Google ofera de obicei 3600 secunde = 1 ora)
+  accessToken=resp.access_token;
+  // Salveaza token-ul si timpul de expirare pentru o ora
   localStorage.setItem("moneydump_token", accessToken);
   localStorage.setItem("moneydump_token_expiry", Date.now() + (resp.expires_in * 1000));
-  
   localStorage.setItem(CONKEY,"1");
   refreshDriveBtn();
   await fullSync(true);
 }
-function connectDrive(){const cid=$("client-id").value.trim();if(!cid){driveStatus("Lipsește Client ID-ul.","bad");return;}localStorage.setItem(CIDKEY,cid);if(!gisReady){driveStatus("Google încă se încarcă, mai încearcă.","bad");return;}if(!initTokenClient()){driveStatus("Nu pot porni Google.","bad");return;}driveStatus("Se deschide fereastra Google…");tokenClient.requestAccessToken({prompt:"consent"});}
+
+function connectDrive(){const cid=$("client-id").value.trim();if(!cid){driveStatus("Lipseste Client ID-ul.","bad");return;}localStorage.setItem(CIDKEY,cid);if(!gisReady){driveStatus("Google inca se incarca, mai incearca.","bad");return;}if(!initTokenClient()){driveStatus("Nu pot porni Google.","bad");return;}driveStatus("Se deschide fereastra Google…");tokenClient.requestAccessToken({prompt:"consent"});}
 $("btn-drive").addEventListener("click",()=>{if(localStorage.getItem(CONKEY)){disconnectDrive();}else{connectDrive();}});
-function disconnectDrive(){
-  accessToken = null;
-  driveFileId = null;
-  localStorage.removeItem(CONKEY);
-  localStorage.removeItem("moneydump_token");
-  localStorage.removeItem("moneydump_token_expiry");
-  refreshDriveBtn();
-  syncState(null);
-  driveStatus("Deconectat.","");
-}
-function refreshDriveBtn(){const con=!!localStorage.getItem(CONKEY);const b=$("btn-drive");b.classList.toggle("connected",con);$("drive-label").textContent=con?"Conectat — apasă pentru deconectare":"Conectează Google Drive";}
-async function driveFetch(url,opts){opts=opts||{};opts.headers=Object.assign({Authorization:"Bearer "+accessToken},opts.headers||{});let r=await fetch(url,opts);if(r.status===401){const t=await reAuth();if(!t)throw new Error("auth");opts.headers.Authorization="Bearer "+accessToken;r=await fetch(url,opts);}return r;}
-function reAuth(){
-  return new Promise(res=>{
-    if(!tokenClient){res(null);return;}
-    const orig=tokenClient.callback;
-    tokenClient.callback=resp=>{
-      tokenClient.callback=orig;
-      if(resp.error){res(null);}
-      else{
-        accessToken=resp.access_token;
-        res(accessToken);
-      }
-    };
-    // Pentru Desktop App rulat in browser, prompt gol se inlocuieste cu select_account
-    // pentru a reimprospata token-ul fara a cere consimtamantul complet din nou
-    tokenClient.requestAccessToken({prompt:"select_account"});
-  });
-}
+function disconnectDrive(){accessToken=null;driveFileId=null;localStorage.removeItem(CONKEY);localStorage.removeItem("moneydump_token");localStorage.removeItem("moneydump_token_expiry");refreshDriveBtn();syncState(null);driveStatus("Deconectat.","");}
+function refreshDriveBtn(){const con=!!localStorage.getItem(CONKEY);const b=$("btn-drive");b.classList.toggle("connected",con);$("drive-label").textContent=con?"Conectat — apasa pentru deconectare":"Conecteaza Google Drive";}
+async function driveFetch(url,opts){opts=opts||{};opts.headers=Object.assign({Authorization:"Bearer "+accessToken},opts.headers||{});let r=await fetch(url,opts);if(r.status===401){disconnectDrive();throw new Error("auth");}return r;}
 async function findFile(){const q=encodeURIComponent("name='"+FILE_NAME+"'");const r=await driveFetch("https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&q="+q);const d=await r.json();return d.files&&d.files[0]?d.files[0].id:null;}
 async function readFile(id){const r=await driveFetch("https://www.googleapis.com/drive/v3/files/"+id+"?alt=media");try{return await r.json();}catch(e){return{entries:[],deleted:[]};}}
-async function createFile(data){const meta={name:FILE_NAME,parents:["appDataFolder"]};const body=new FormData();body.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));body.append("file",new Blob([JSON.stringify(data)],{type:"application/json"}));const r=await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{method:"POST",body});const d=await r.json();return d.id;}
+async function createFile(data){const meta={name:FILE_NAME,parents:["appDataFolder"]};const body=new FormData();body.append("metadata",new Blob([JSON.stringify(meta)],{type:"application/json"}));body.append("file",new Blob([JSON.stringify(data)],{type:"application/json"}));const r=await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id",{method:"POST",body,headers:{Authorization:"Bearer "+accessToken}});const d=await r.json();return d.id;}
 async function updateFile(id,data){await driveFetch("https://www.googleapis.com/upload/drive/v3/files/"+id+"?uploadType=media",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)});}
 let syncBusy=false,syncQueued=false;
-async function fullSync(showOk){if(!accessToken)return;if(syncBusy){syncQueued=true;return;}syncBusy=true;syncState("syncing");try{if(!driveFileId)driveFileId=await findFile();let remote=driveFileId?await readFile(driveFileId):{entries:[],deleted:[]};const merged=mergeStores(store,remote);store=merged;saveStore();if(driveFileId)await updateFile(driveFileId,merged);else driveFileId=await createFile(merged);renderAll();syncState("ok");if(showOk)driveStatus("Sincronizat ("+store.entries.length+" intrări).","good");}catch(e){syncState("error");if(showOk)driveStatus("Eroare la sincronizare.","bad");}syncBusy=false;if(syncQueued){syncQueued=false;fullSync();}}
+async function fullSync(showOk){if(!accessToken)return;if(syncBusy){syncQueued=true;return;}syncBusy=true;syncState("syncing");try{if(!driveFileId)driveFileId=await findFile();let remote=driveFileId?await readFile(driveFileId):{entries:[],deleted:[]};const merged=mergeStores(store,remote);store=merged;saveStore();if(driveFileId)await updateFile(driveFileId,merged);else driveFileId=await createFile(merged);renderAll();syncState("ok");if(showOk)driveStatus("Sincronizat ("+store.entries.length+" intrari).","good");}catch(e){syncState("error");if(showOk)driveStatus("Eroare la sincronizare.","bad");}syncBusy=false;if(syncQueued){syncQueued=false;fullSync();}}
 let syncT;function scheduleSync(){if(!accessToken)return;clearTimeout(syncT);syncT=setTimeout(()=>fullSync(),900);}
 
 function renderAll(){updateToday();if(app.dataset.view==="history")renderHistory();}
 
 /* ---------- init ---------- */
 setGreeting();updateToday();autosize();refreshDriveBtn();
+
 waitGis(()=>{
   if(localStorage.getItem(CIDKEY)){
     initTokenClient();
@@ -547,21 +517,35 @@ waitGis(()=>{
     const savedToken = localStorage.getItem("moneydump_token");
     const expiry = localStorage.getItem("moneydump_token_expiry");
     
-    // PASUL A: Daca avem un token salvat si inca este valabil (sub o ora), il folosim instant, fara popup!
+    // 1. Daca esti in interiorul orei de valabilitate, porneste direct conectat
     if(savedToken && expiry && Date.now() < parseInt(expiry)){
       accessToken = savedToken;
       syncState("ok");
       refreshDriveBtn();
       fullSync(true);
     } 
-    // PASUL B: Daca a expirat ora, dar utilizatorul era conectat, cerem un token nou in fundal (prompt: "none")
-    // Acest mod foloseste cookie-urile Google din browser, nu deschide popup si nu este blocat de telefon!
-    else if(localStorage.getItem(CONKEY) && tokenClient){
-      tokenClient.requestAccessToken({prompt:"none"});
+    // 2. Daca a expirat ora, asteptam prima atingere a ecranului pentru a reimprospata token-ul curat
+    else if(localStorage.getItem(CONKEY)){
+      syncState("syncing");
+      driveStatus("Se va conecta automat la prima atingere a ecranului...","");
+      
+      const autoAuth = () => {
+        window.removeEventListener("click", autoAuth);
+        window.removeEventListener("touchstart", autoAuth);
+        
+        if (tokenClient) {
+          tokenClient.callback = async (resp) => {
+            await tokenCb(resp);
+          };
+          tokenClient.requestAccessToken({prompt: ""});
+        }
+      };
+      
+      window.addEventListener("click", autoAuth);
+      window.addEventListener("touchstart", autoAuth);
     }
   }
 });
-if(isDesktop)setTimeout(()=>nameInput.focus(),500);
 
 })();
 </script>
